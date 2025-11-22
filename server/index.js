@@ -4,7 +4,8 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs-extra');
 const sharp = require('sharp');
-const { analyzeProductImage } = require('./layoutEngine');
+const { analyzeProductImage, generateCompositeImage } = require('./layoutEngine');
+const { analyzeWithML } = require('./mlLayoutEngine');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -79,11 +80,32 @@ app.get('/health', (req, res) => {
   });
 });
 
-// API Endpoint: POST /api/generate
-app.post('/api/generate', productUpload, async (req, res) => {
+// Test endpoint to verify image accessibility
+app.get('/test-image/:filename', (req, res) => {
+  const filename = req.params.filename;
+  const imagePath = path.join(UPLOADS_DIR, filename);
+  
+  if (fs.existsSync(imagePath)) {
+    res.json({ 
+      exists: true, 
+      filename: filename,
+      url: `/uploads/${filename}`,
+      serverTime: new Date().toISOString()
+    });
+  } else {
+    res.status(404).json({ 
+      exists: false, 
+      filename: filename,
+      message: 'Image not found'
+    });
+  }
+});
+
+// API Endpoint: POST /api/generate-final
+app.post('/api/generate-final', productUpload, async (req, res) => {
   try {
     // Validate required fields
-    const requiredFields = ['sku', 'brand', 'name', 'fullPrice'];
+    const requiredFields = ['sku', 'brand', 'productName', 'fullPrice'];
     const missingFields = requiredFields.filter(field => !req.body[field]);
     
     if (missingFields.length > 0) {
@@ -106,7 +128,105 @@ app.post('/api/generate', productUpload, async (req, res) => {
     const textData = {
       sku: req.body.sku,
       brand: req.body.brand,
-      name: req.body.name,
+      productName: req.body.productName,
+      fullPrice: req.body.fullPrice,
+      discountPrice: req.body.discountPrice || null,
+      percentOff: req.body.percentOff || null
+    };
+
+    // Get uploaded file paths
+    const productImageFile = req.files.productImage[0];
+    const icon1File = req.files.icon1 ? req.files.icon1[0] : null;
+    const icon2File = req.files.icon2 ? req.files.icon2[0] : null;
+
+    // Build image URLs for uploaded files
+    const imageUrls = {
+      productImage: `/uploads/${productImageFile.filename}`,
+      icon1: icon1File ? `/uploads/${icon1File.filename}` : null,
+      icon2: icon2File ? `/uploads/${icon2File.filename}` : null
+    };
+
+    // Analyze product image for positioning using ML detection
+    const productImagePath = path.join(UPLOADS_DIR, productImageFile.filename);
+    const layoutData = await analyzeWithML(productImagePath);
+
+    // Generate the final composite image
+    const compositeImageBuffer = await generateCompositeImage({
+      productImage: productImagePath,
+      textData: textData,
+      layoutData: layoutData,
+      icon1File: icon1File,
+      icon2File: icon2File
+    });
+
+    // Generate filename for the final composite image
+    const timestamp = Date.now();
+    const finalImageFilename = `composite-${productImageFile.filename.replace(/\.[^/.]+$/, "")}-${timestamp}.png`;
+    const finalImagePath = path.join(UPLOADS_DIR, finalImageFilename);
+
+    // Save the composite image
+    await fs.writeFile(finalImagePath, compositeImageBuffer);
+
+    console.log('🎨 DEBUG: Final composite image generated:', finalImageFilename);
+
+    // Return successful response with the final image URL
+    res.json({
+      success: true,
+      textData: textData,
+      imageUrls: imageUrls,
+      finalImageUrl: `/uploads/${finalImageFilename}`,
+      aiDebug: {
+        detected: layoutData.detectedLabel,
+        confidence: layoutData.confidence,
+        method: layoutData.method
+      },
+      layoutStrategy: {
+        coordinates: layoutData.optimalPositions,
+        productBounds: layoutData.productBounds,
+        zones: layoutData.zones,
+        canvasSize: layoutData.canvasSize
+      },
+      message: 'Final composite image generated successfully'
+    });
+
+  } catch (error) {
+    console.error('Error in /api/generate-final:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Final image generation failed',
+      details: error.message
+    });
+  }
+});
+
+// API Endpoint: POST /api/generate
+app.post('/api/generate', productUpload, async (req, res) => {
+  try {
+    // Validate required fields
+    const requiredFields = ['sku', 'brand', 'productName', 'fullPrice'];
+    const missingFields = requiredFields.filter(field => !req.body[field]);
+    
+    if (missingFields.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields',
+        missingFields: missingFields
+      });
+    }
+
+    // Validate that product image was uploaded
+    if (!req.files || !req.files.productImage) {
+      return res.status(400).json({
+        success: false,
+        error: 'Product image is required'
+      });
+    }
+
+    // Extract form data
+    const textData = {
+      sku: req.body.sku,
+      brand: req.body.brand,
+      productName: req.body.productName,
       fullPrice: req.body.fullPrice,
       discountPrice: req.body.discountPrice || null,
       percentOff: req.body.percentOff || null
@@ -124,23 +244,55 @@ app.post('/api/generate', productUpload, async (req, res) => {
       icon2: icon2File ? `/uploads/${icon2File.filename}` : null
     };
 
-    // Use Smart Layout Engine to analyze product image
+    // Use ML Analysis to analyze product image for positioning
     const productImagePath = path.join(UPLOADS_DIR, productImageFile.filename);
-    const layoutData = await analyzeProductImage(productImagePath);
+    const layoutData = await analyzeWithML(productImagePath);
 
-    // Return successful response with layout strategy and file URLs
-    res.json({
+    // Generate the final composite image
+    const compositeImageBuffer = await generateCompositeImage({
+      productImage: productImagePath,
+      textData: textData,
+      layoutData: layoutData,
+      icon1File: icon1File,
+      icon2File: icon2File
+    });
+
+    // Generate filename for the final composite image
+    const timestamp = Date.now();
+    const finalImageFilename = `composite-${productImageFile.filename.replace(/\.[^/.]+$/, "")}-${timestamp}.png`;
+    const finalImagePath = path.join(UPLOADS_DIR, finalImageFilename);
+
+    // Save the composite image
+    await fs.writeFile(finalImagePath, compositeImageBuffer);
+
+    console.log('🎨 DEBUG: Final composite image generated:', finalImageFilename);
+
+    // Log the response data for debugging
+    const responseData = {
       success: true,
       textData: textData,
       imageUrls: imageUrls,
+      finalImageUrl: `/uploads/${finalImageFilename}`,
+      aiDebug: {
+        detected: layoutData.detectedLabel,
+        confidence: layoutData.confidence,
+        method: layoutData.method
+      },
       layoutStrategy: {
         coordinates: layoutData.optimalPositions,
         productBounds: layoutData.productBounds,
         zones: layoutData.zones,
         canvasSize: layoutData.canvasSize
       },
-      message: 'Product analyzed successfully'
-    });
+      message: 'Product analyzed and final composite image generated successfully'
+    };
+    
+    console.log('🔍 DEBUG: Server Response Data:', JSON.stringify(responseData, null, 2));
+    console.log('📁 DEBUG: Product image uploaded to:', imageUrls.productImage);
+    console.log('🎨 DEBUG: Final composite image saved as:', finalImageFilename);
+    
+    // Return successful response with layout strategy, file URLs, and final image
+    res.json(responseData);
 
   } catch (error) {
     console.error('Error in /api/generate:', error);

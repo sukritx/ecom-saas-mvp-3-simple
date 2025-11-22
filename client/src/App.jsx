@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useForm } from 'react-hook-form'
-import { Canvas, Text, Image } from 'fabric'
+import * as fabric from 'fabric'
 import axios from 'axios'
 import { HeroUIProvider } from '@heroui/react'
 import './App.css'
@@ -26,7 +26,7 @@ function App() {
   // Initialize canvas on component mount
   useEffect(() => {
     if (canvasRef.current && !fabricCanvasRef.current) {
-      fabricCanvasRef.current = new Canvas(canvasRef.current, {
+      fabricCanvasRef.current = new fabric.Canvas(canvasRef.current, {
         width: 500,
         height: 500,
         backgroundColor: 'white'
@@ -65,7 +65,7 @@ function App() {
     if (productImageFile) {
       const reader = new FileReader()
       reader.onload = function(e) {
-        Image.fromURL(e.target.result, (img) => {
+        fabric.Image.fromURL(e.target.result, (img) => {
           // Scale to 300px width
           const scale = 300 / img.width
           img.set({
@@ -83,7 +83,7 @@ function App() {
 
     // Render price text
     if (watchedFields.discountedPrice) {
-      const priceText = new Text(`${watchedFields.discountedPrice}`, {
+      const priceText = new fabric.Text(`${watchedFields.discountedPrice}`, {
         left: layout.pricePos.x,
         top: layout.pricePos.y,
         fontFamily: 'Arial',
@@ -98,7 +98,7 @@ function App() {
 
     // Render crossed-out full price
     if (watchedFields.fullPrice) {
-      const fullPriceText = new Text(`${watchedFields.fullPrice}`, {
+      const fullPriceText = new fabric.Text(`${watchedFields.fullPrice}`, {
         left: layout.pricePos.x,
         top: layout.pricePos.y - 30,
         fontFamily: 'Arial',
@@ -114,7 +114,7 @@ function App() {
     // Render title/brand
     if (watchedFields.productName || watchedFields.brand) {
       const title = watchedFields.productName || watchedFields.brand
-      const titleText = new Text(title, {
+      const titleText = new fabric.Text(title, {
         left: layout.titlePos.x,
         top: layout.titlePos.y,
         fontFamily: 'Arial',
@@ -133,7 +133,7 @@ function App() {
     if (icon1File) {
       const reader = new FileReader()
       reader.onload = function(e) {
-        Image.fromURL(e.target.result, (img) => {
+        fabric.Image.fromURL(e.target.result, (img) => {
           const scale = 50 / img.width
           img.set({
             scaleX: scale,
@@ -191,16 +191,116 @@ function App() {
       })
 
       // Handle successful response
-      console.log('Generation successful:', response.data)
+      console.log('🔍 DEBUG: Client received response:', response.data)
+      console.log('📁 DEBUG: Image URLs from server:', response.data.imageUrls)
+      console.log('🎨 DEBUG: Final image URL from server:', response.data.finalImageUrl)
       
-      // Reset form after successful submission
-      reset()
-      
-      // Clear canvas
-      if (fabricCanvasRef.current) {
-        fabricCanvasRef.current.clear()
-        fabricCanvasRef.current.backgroundColor = 'white'
-        fabricCanvasRef.current.renderAll()
+      // Check if there's a generated image URL in the response
+      if (response.data.finalImageUrl) {
+        console.log('🎨 DEBUG: Loading final generated image:', response.data.finalImageUrl)
+        
+        // Load and display the final generated image
+        const finalImageUrl = `http://localhost:5000${response.data.finalImageUrl}`;
+        
+        console.log('🎨 DEBUG: Loading generated image from:', finalImageUrl);
+        
+        // Try multiple approaches to load the image
+        const loadImageWithFabric = () => {
+          fabric.Image.fromURL(finalImageUrl, (img) => {
+            console.log('✅ DEBUG: Fabric image loaded successfully');
+            
+            if (fabricCanvasRef.current) {
+              // Clear canvas first
+              fabricCanvasRef.current.clear();
+              fabricCanvasRef.current.backgroundColor = 'white';
+              
+              // Calculate proper scaling to fit canvas
+              const canvasWidth = fabricCanvasRef.current.width;
+              const canvasHeight = fabricCanvasRef.current.height;
+              const imageWidth = img.width || 1080;
+              const imageHeight = img.height || 1080;
+              
+              const scale = Math.min(canvasWidth / imageWidth, canvasHeight / imageHeight);
+              const scaledWidth = imageWidth * scale;
+              const scaledHeight = imageHeight * scale;
+              const left = (canvasWidth - scaledWidth) / 2;
+              const top = (canvasHeight - scaledHeight) / 2;
+              
+              console.log('📐 DEBUG: Image scaling:', {
+                original: `${imageWidth}x${imageHeight}`,
+                canvas: `${canvasWidth}x${canvasHeight}`,
+                scale: scale,
+                scaled: `${scaledWidth}x${scaledHeight}`,
+                position: `${left}x${top}`
+              });
+              
+              // Set image properties
+              img.set({
+                left: left,
+                top: top,
+                scaleX: scale,
+                scaleY: scale,
+                selectable: false,
+                evented: false
+              });
+              
+              // Add to canvas and render
+              fabricCanvasRef.current.add(img);
+              fabricCanvasRef.current.renderAll();
+              
+              console.log('✅ DEBUG: Generated image successfully displayed in preview canvas');
+              console.log('🎨 DEBUG: Final image properties:', {
+                left: img.left,
+                top: img.top,
+                scaleX: img.scaleX,
+                scaleY: img.scaleY,
+                width: img.width,
+                height: img.height
+              });
+            }
+          }, { 
+            crossOrigin: 'anonymous',
+            onError: (err) => {
+              console.error('❌ DEBUG: Fabric image loading failed:', err);
+            }
+          });
+        };
+        
+        // Test if the server endpoint is accessible first
+        const testImageEndpoint = async () => {
+          try {
+            const testUrl = finalImageUrl.replace('/uploads/', '/test-image/');
+            const response = await fetch(testUrl);
+            console.log('🔍 DEBUG: Test endpoint response:', response.status, response.statusText);
+            
+            if (response.ok) {
+              const data = await response.json();
+              console.log('✅ DEBUG: Image exists on server:', data);
+              loadImageWithFabric();
+            } else {
+              console.log('❌ DEBUG: Image not found on server');
+            }
+          } catch (error) {
+            console.log('❌ DEBUG: Test endpoint failed:', error.message);
+          }
+        };
+        
+        // Load the image
+        loadImageWithFabric();
+        
+        // Also test the endpoint
+        testImageEndpoint();
+        
+      } else {
+        console.log('📝 DEBUG: Only layout data received, no final image generated')
+        // Reset form and clear canvas if no final image
+        reset()
+        
+        if (fabricCanvasRef.current) {
+          fabricCanvasRef.current.clear()
+          fabricCanvasRef.current.backgroundColor = 'white'
+          fabricCanvasRef.current.renderAll()
+        }
       }
       
     } catch (error) {
@@ -213,16 +313,6 @@ function App() {
   return (
     <HeroUIProvider>
       <div className="min-h-screen bg-gray-50">
-        <header className="bg-white shadow-sm border-b">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-            <h1 className="text-3xl font-bold text-gray-900">
-              Product Image Generator
-            </h1>
-            <p className="mt-2 text-sm text-gray-600">
-              Generate professional product images with AI-powered layouts
-            </p>
-          </div>
-        </header>
 
         <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -320,7 +410,7 @@ function App() {
                   </label>
                   <input
                     type="file"
-                    accept="image/png"
+                    accept="image/png,image/jpeg,image/jpg"
                     {...register('productImage', { required: 'Product image is required' })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent file:mr-4 file:py-1 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
                   />
