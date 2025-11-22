@@ -12,6 +12,7 @@
   "dependencies": {
     "@heroui/react": "^2.8.5",
     "@tailwindcss/postcss": "^4.1.17",
+    "@tailwindcss/vite": "^4.1.17",
     "axios": "^1.13.2",
     "clsx": "^2.1.1",
     "fabric": "^6.9.0",
